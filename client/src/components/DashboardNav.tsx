@@ -20,6 +20,7 @@ import {
   Bell,
   User,
   Clock,
+  Bug,
 } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { getLoginUrl } from "@/const";
@@ -38,6 +39,7 @@ const navItems: NavItem[] = [
   { label: "Templates", href: "/templates", icon: <FileText className="w-4 h-4" /> },
   { label: "History", href: "/history", icon: <Clock className="w-4 h-4" /> },
   { label: "Notifications", href: "/notifications", icon: <Bell className="w-4 h-4" /> },
+  { label: "Debug", href: "/debug", icon: <Bug className="w-4 h-4" /> },
   { label: "Webhooks", href: "/webhooks", icon: <Webhook className="w-4 h-4" /> },
   { label: "Export", href: "/export", icon: <FileText className="w-4 h-4" /> },
   { label: "Settings", href: "/settings", icon: <Settings className="w-4 h-4" /> },

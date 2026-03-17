@@ -16,11 +16,15 @@ import {
   TaskPlan,
   ToolCall,
 } from "./types";
+import { TaskMemoryContext } from "./memory";
+import { createLogger, StructuredLogger } from "../services/logger";
 import { eq } from "drizzle-orm";
 import { tasks, checkpoints, conversationHistory, toolExecutions } from "../../drizzle/schema";
 
 export class AgentLoop {
   private context: ExecutionContext | null = null;
+  private memory: TaskMemoryContext | null = null;
+  private logger: StructuredLogger | null = null;
   private onThought?: (thought: AgentThought) => void;
   private onPhaseChange?: (phase: AgentPhase) => void;
   private onToolExecution?: (toolName: string, status: string) => void;
@@ -88,6 +92,10 @@ export class AgentLoop {
       };
     }
 
+    // Initialize logger
+    this.logger = createLogger(taskId, userId);
+    await this.logger.info("agent_loop", "Initializing agent loop", { taskId, userId });
+
     // Initialize context
     this.context = {
       taskId,
@@ -109,12 +117,16 @@ export class AgentLoop {
       lastCheckpoint,
     };
 
-    // Add user message to conversation
+    // Initialize memory
+    this.memory = new TaskMemoryContext(taskId);
+
+    // Add user message to conversation and memory
     this.context.conversationHistory.push({
       role: "user",
       content: userPrompt,
       timestamp: new Date(),
     });
+    this.memory.recordThought(`User prompt: ${userPrompt}`);
   }
 
   /**
@@ -196,6 +208,7 @@ export class AgentLoop {
     };
 
     this.onThought?.(thought);
+    this.memory?.recordThought(thought.content);
   }
 
   /**
@@ -234,8 +247,10 @@ Return a JSON object with this structure:
   ]
 }`;
 
+    const memoryContext = this.memory?.getContextForLLM() || "";
     const messages: Array<{ role: string; content: string }> = [
       { role: "system", content: systemPrompt },
+      { role: "system", content: memoryContext },
       ...this.context.conversationHistory.map((m) => ({
         role: m.role,
         content: m.content,
@@ -295,6 +310,7 @@ Return a JSON object with this structure:
     };
 
     this.onThought?.(thought);
+    this.memory?.recordThought(thought.content);
     this.context.conversationHistory.push({
       role: "assistant",
       content: `I've created an execution plan with ${this.context.plan.phases.length} phases.`,
@@ -306,11 +322,20 @@ Return a JSON object with this structure:
    * Execution Phase: Execute planned steps
    */
   private async executionPhase(): Promise<boolean> {
-    if (!this.context) return false;
+    if (!this.context || !this.logger) return false;
 
     const currentPhase = this.context.plan.phases[0];
     if (!currentPhase) {
       return false; // No more phases
+    }
+
+    // Check if this phase should run in parallel
+    if (currentPhase.parallel) {
+      await this.logger.info("agent_loop", `Executing phase ${currentPhase.name} in parallel`, {
+        phaseId: currentPhase.id,
+        stepCount: currentPhase.steps.length,
+      });
+      return await this.executeParallelPhase(currentPhase);
     }
 
     const currentStep = currentPhase.steps[this.context.currentStepIndex];
@@ -321,43 +346,78 @@ Return a JSON object with this structure:
       return true; // Continue execution
     }
 
+    await this.executeStep(currentStep);
+    this.context.currentStepIndex++;
+
+    return true; // Continue execution
+  }
+
+  /**
+   * Execute a single step
+   */
+  private async executeStep(step: any): Promise<void> {
+    if (!this.context || !this.logger) return;
+
+    await this.logger.info("tool_execution", `Executing step: ${step.description}`, {
+      tool: step.tool,
+      params: step.params,
+    });
+
     this.addExecutionEvent({
       phase: "execution",
       type: "thought",
-      message: `Executing step: ${currentStep.description}`,
+      message: `Executing step: ${step.description}`,
     });
 
     const toolCall: ToolCall = {
-      toolName: currentStep.tool,
-      params: currentStep.params,
-      timeout: currentStep.timeout,
+      toolName: step.tool,
+      params: step.params,
+      timeout: step.timeout,
     };
 
-    this.onToolExecution?.(currentStep.tool, "running");
+    this.onToolExecution?.(step.tool, "running");
 
     const result = await toolRegistry.executeTool(toolCall);
+
+    if (result.success) {
+      await this.logger.info("tool_execution", `Tool ${step.tool} succeeded`, {
+        tool: step.tool,
+        duration: result.duration,
+      });
+    } else {
+      await this.logger.error("tool_execution", `Tool ${step.tool} failed`, new Error(result.error), {
+        tool: step.tool,
+        duration: result.duration,
+      });
+    }
 
     this.addExecutionEvent({
       phase: "execution",
       type: "tool_result",
-      message: `Tool ${currentStep.tool} ${result.success ? "succeeded" : "failed"}`,
+      message: `Tool ${step.tool} ${result.success ? "succeeded" : "failed"}`,
       data: {
-        tool: currentStep.tool,
+        tool: step.tool,
         success: result.success,
         output: result.output,
         error: result.error,
       },
     });
 
-    this.onToolExecution?.(currentStep.tool, result.success ? "success" : "failed");
+    this.onToolExecution?.(step.tool, result.success ? "success" : "failed");
+
+    if (result.success) {
+      this.memory?.recordExecution(step.tool, step.params, result.output);
+    } else {
+      this.memory?.recordError(step.tool, new Error(result.error || "Unknown error"));
+    }
 
     // Store tool execution
     const db = await getDb();
     if (db) {
       await db.insert(toolExecutions).values({
         taskId: this.context.taskId,
-        toolName: currentStep.tool,
-        params: JSON.stringify(currentStep.params),
+        toolName: step.tool,
+        params: JSON.stringify(step.params),
         result: result.success ? JSON.stringify(result.output) : null,
         error: result.error || null,
         duration: result.duration,
@@ -371,10 +431,34 @@ Return a JSON object with this structure:
     }
 
     // Store result in state
-    this.context.state[`${currentStep.tool}_result`] = result.output;
-    this.context.currentStepIndex++;
+    this.context.state[`${step.tool}_result`] = result.output;
+  }
 
-    return true; // Continue execution
+  /**
+   * Execute all steps in a phase in parallel
+   */
+  private async executeParallelPhase(phase: any): Promise<boolean> {
+    if (!this.context) return false;
+
+    this.addExecutionEvent({
+      phase: "execution",
+      type: "thought",
+      message: `Executing phase ${phase.name} in parallel`,
+    });
+
+    // Execute all steps concurrently
+    const promises = phase.steps.map((step: any) => this.executeStep(step));
+    
+    try {
+      await Promise.all(promises);
+      
+      // Move to next phase
+      this.context.plan.phases.shift();
+      this.context.currentStepIndex = 0;
+      return true;
+    } catch (error) {
+      throw new Error(`Parallel execution failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   /**
@@ -391,8 +475,10 @@ Return a JSON object with this structure:
 
     const systemPrompt = `You are an expert task evaluator. Summarize the execution results and provide insights.`;
 
+    const memoryContext = this.memory?.getContextForLLM() || "";
     const messages: Array<{ role: string; content: string }> = [
       { role: "system", content: systemPrompt },
+      { role: "system", content: memoryContext },
       ...this.context.conversationHistory.map((m) => ({
         role: m.role,
         content: m.content,

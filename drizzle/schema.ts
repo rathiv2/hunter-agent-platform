@@ -295,3 +295,23 @@ export type AuditLog = typeof auditLogs.$inferSelect;
 export type InsertAuditLog = typeof auditLogs.$inferInsert;
 
 
+
+/**
+ * Debug Logs table - Stores detailed execution traces and debug information
+ */
+export const debugLogs = mysqlTable("debugLogs", {
+  id: int("id").autoincrement().primaryKey(),
+  taskId: int("taskId").notNull().references(() => tasks.id),
+  userId: int("userId").notNull().references(() => users.id),
+  level: mysqlEnum("level", ["debug", "info", "warn", "error", "fatal"]).notNull(),
+  category: varchar("category", { length: 64 }).notNull(), // e.g., "agent_loop", "tool_execution", "memory"
+  message: text("message").notNull(),
+  context: text("context"), // JSON with contextual data
+  stackTrace: text("stackTrace"), // Stack trace for errors
+  metadata: text("metadata"), // JSON for additional structured data
+  duration: int("duration"), // milliseconds for performance tracking
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type DebugLog = typeof debugLogs.$inferSelect;
+export type InsertDebugLog = typeof debugLogs.$inferInsert;

@@ -7,8 +7,8 @@ import { useEffect, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
-import { Loader2, TrendingUp, CheckCircle, AlertCircle, Clock, Zap } from "lucide-react";
+import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area } from "recharts";
+import { Loader2, TrendingUp, CheckCircle, AlertCircle, Clock, Zap, Coins, DollarSign } from "lucide-react";
 
 interface TaskMetrics {
   taskId: number;
@@ -95,7 +95,7 @@ export default function Analytics() {
 
         {/* Aggregate Metrics Cards */}
         {aggregateMetrics && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
             <Card>
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Total Tasks</CardTitle>
@@ -160,12 +160,62 @@ export default function Analytics() {
           </div>
         )}
 
+        {/* Token Usage & Cost Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                <Coins className="w-4 h-4 text-yellow-500" />
+                Total Tokens
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{tokenStats?.totalTokens.toLocaleString() || 0}</div>
+              <p className="text-xs text-muted-foreground mt-1">Last 30 days</p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                <DollarSign className="w-4 h-4 text-green-500" />
+                Estimated Cost
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{totalCost?.total || "$0.00"}</div>
+              <p className="text-xs text-muted-foreground mt-1">Total spend</p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">Avg Tokens/Task</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{Math.round(tokenStats?.averageTokensPerRequest || 0).toLocaleString()}</div>
+              <p className="text-xs text-muted-foreground mt-1">Per execution</p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">Avg Cost/Task</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{tokenStats?.averageCostPerRequest ? `$${tokenStats.averageCostPerRequest.toFixed(4)}` : "$0.00"}</div>
+              <p className="text-xs text-muted-foreground mt-1">Per execution</p>
+            </CardContent>
+          </Card>
+        </div>
+
         {/* Charts */}
         <Tabs defaultValue="overview" className="space-y-4">
           <TabsList>
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="timeline">Timeline</TabsTrigger>
             <TabsTrigger value="tools">Tool Performance</TabsTrigger>
+            <TabsTrigger value="tokens">Token Usage</TabsTrigger>
           </TabsList>
 
           <TabsContent value="overview" className="space-y-4">
@@ -268,7 +318,7 @@ export default function Analytics() {
             </Card>
           </TabsContent>
 
-          <TabsContent value="tools">
+          <TabsContent value="tools" className="space-y-4">
             <Card>
               <CardHeader>
                 <CardTitle>Tool Performance</CardTitle>
@@ -302,7 +352,81 @@ export default function Analytics() {
               </CardContent>
             </Card>
           </TabsContent>
-        </Tabs>
+
+          <TabsContent value="tokens" className="space-y-4">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Cost by Model</CardTitle>
+                  <CardDescription>Estimated spend across different LLM models</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {costBreakdown && Object.keys(costBreakdown).length > 0 ? (
+                    <ResponsiveContainer width="100%" height={300}>
+                      <PieChart>
+                        <Pie
+                          data={Object.entries(costBreakdown).map(([name, data]: any) => ({
+                            name,
+                            value: parseFloat(data.cost.replace("$", "")),
+                          }))}
+                          cx="50%"
+                          cy="50%"
+                          outerRadius={80}
+                          fill="#8884d8"
+                          dataKey="value"
+                          label={({ name, value }) => `${name}: $${value.toFixed(4)}`}
+                        >
+                          {Object.keys(costBreakdown).map((_, index) => (
+                            <Cell key={`cell-${index}`} fill={["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6"][index % 5]} />
+                          ))}
+                        </Pie>
+                        <Tooltip formatter={(value: number) => `$${value.toFixed(4)}`} />
+                        <Legend />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="h-[300px] flex items-center justify-center text-muted-foreground">
+                      No cost data available
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Token Usage Distribution</CardTitle>
+                  <CardDescription>Prompt vs Completion tokens</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {tokenStats ? (
+                    <ResponsiveContainer width="100%" height={300}>
+                      <BarChart
+                        data={[
+                          {
+                            name: "Tokens",
+                            prompt: tokenStats.totalPromptTokens,
+                            completion: tokenStats.totalCompletionTokens,
+                          },
+                        ]}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="name" />
+                        <YAxis />
+                        <Tooltip />
+                        <Legend />
+                        <Bar dataKey="prompt" fill="#3b82f6" name="Prompt Tokens" stackId="a" />
+                        <Bar dataKey="completion" fill="#10b981" name="Completion Tokens" stackId="a" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="h-[300px] flex items-center justify-center text-muted-foreground">
+                      No token data available
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>s>
 
         {/* Task List */}
         <Card className="mt-8">

@@ -20,6 +20,7 @@ export interface PlanPhase {
   description: string;
   steps: PlanStep[];
   dependencies: string[]; // IDs of phases that must complete first
+  parallel?: boolean; // Whether steps in this phase can run in parallel
 }
 
 export interface PlanStep {

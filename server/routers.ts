@@ -19,6 +19,7 @@ import { apiKeysRouter } from "./routers/apiKeys";
 import { adminRouter } from "./routers/admin";
 import { dataExportRouter } from "./routers/dataExport";
 import { apiDocsRouter } from "./routers/apiDocs";
+import { debugLogsRouter } from "./routers/debugLogs";
 
 export const appRouter = router({
   system: systemRouter,
@@ -39,6 +40,7 @@ export const appRouter = router({
   admin: adminRouter,
   dataExport: dataExportRouter,
   apiDocs: apiDocsRouter,
+  debugLogs: debugLogsRouter,
   auth: router({
     me: publicProcedure.query((opts) => opts.ctx.user),
     logout: publicProcedure.mutation(({ ctx }) => {
